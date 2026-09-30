@@ -1,4 +1,4 @@
-<h1> Data Analysis Project on Booking.com's Scrapes </h1>
+<h1> Booking.com Market Analysis Project </h1>
 
 **Disclaimer**: \
 This project and the associated dataset are strictly for educational and portfolio purposes. \
