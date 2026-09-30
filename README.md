@@ -145,7 +145,7 @@ Key features:
 
 <h2> Dashboard using Tableau </h2>
 
-![Dashboard](dashboard.png)
+![Dashboard](https://github.com/ThuCoo/DAProject_BookingScrape/blob/7a2e44f0c921070b790a4a3bb68ebfbad5cd2be7/Dashboard.png)
 
 [Tableau Link](https://public.tableau.com/views/DAProject-Bookings/Dashboard?:language=en-US&:sid=&:redirect=auth&:display_count=n&:origin=viz_share_link)
 
