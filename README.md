@@ -1,167 +1,108 @@
-<h1> Booking.com Market Analysis Project </h1>
+# London Hospitality Market Intelligence & Dynamic Pricing Specification
 
-**Disclaimer**: \
-This project and the associated dataset are strictly for educational and portfolio purposes. \
-The data was collected to demonstrate SQL and market analysis skills. Web scraping major platforms may violate their Terms of Service. \
-This project is not intended for commercial use, and anyone conducting web scraping should review Booking.com’s robots.txt and Terms of Service beforehand.
+**Role Focus:** Data Engineering & Analysis (Python, Selenium, MS SQL Server, Tableau) | Technical Business Analysis (Data Modeling, Pricing Business Rules, Agile Specs)
 
-<h2> Project Summary </h2>
-This project scrapes Booking.com's London properties data to analyze property pricing, geographic distribution, customer sentiment, and temporal trends to uncover competitive market insights.
+> **Quick Navigation:**
+>
+> - **For Data Teams:** [ETL Pipeline & Incremental Ingestion](#2-data-pipeline--architecture) | [SQL Market Analysis & Tableau Dashboard](#3-sql-exploratory-analysis--market-insights)
+> - **For Product & BA Teams:** [Executive Problem Statement](#1-executive-problem-statement) | [Dynamic Pricing Decision Table](#4-proposed-product-solution--business-rules) | [User Stories & KPI Framework](#5-agile-user-stories--kpi-framework)
 
-<h2> Problem Statement </h2>
+---
 
-Launching a new short-term rental on Booking.com without historical data often leads to "guesswork pricing", resulting in either vacant calendars or leaving money on the table. \
-As a prospective property owner in London, granular visibility into localized supply density, daily price fluctuations, and competitor performance is needed to build a data-backed launch strategy, optimize initial pricing, and identify exactly what drives top-tier guest ratings in target borough.
+## 1. Executive Problem Statement
 
-<h2> Tools Used </h2>
+Independent property hosts and hospitality managers in London often rely on static nightly pricing, leaving revenue on the table during peak demand or losing occupancy in saturated boroughs. This project builds an automated web scraping and SQL analytics pipeline across **6,885 scraped London property records** on Booking.com, translating borough-level price elasticity and rating benchmarks into a **Dynamic Pricing Engine Specification**.
 
-- **Python** - Data Scraping, Preparation and Modeling.
-- **MS SQL Server** - Data Analysis.
-- **Tableau** - Visualization and insights.
-- **VS Code** - Development environment.
+- **Analytical Baseline:** Engineered a multi-run scraping pipeline capturing **6,885 property records** across **23+ London boroughs** (with a single check-in date snapshot capturing ~643 unique properties at an average nightly rate of **$301.98 USD**, median **$245.00 USD**, and median guest score of **8.0/10**).
+- **What-If Opportunity Sizing (Dataset Simulation):** Across `dbo.bookings`, **26.82%** of top-rated properties (`score >= 8.5`) are priced below their respective borough median by an average of **$53.62 USD/night**. Adjusting weekend rates to match the borough median across 8 peak Friday/Saturday nights per month represents an estimated **$428.93 USD monthly revenue lift per property** without requiring occupancy increases.
 
-<h2> Scraping Data using Python + Selenium </h2>
-Executed 7 automated scraping sessions across the week <i>(Check In Date from 13/10/2026 to 19/10/2026)</i> to capture temporal pricing and availability variations.
+<details>
+<summary><b> SQL Logic Used for Opportunity Sizing </b></summary>
 
-- **Target Setup**: Defined check-in dates 14 days in advance and built search parameters for London properties.
-- **Automated Navigation**: Used Selenium WebDriver to bypass sign-in modals and continuously clicked "_Load more results_" to capture full search pagination.
-- **Data Extraction**: Parsed property cards to extract URLs, names, locations, prices, and review ratings.
-- **Export**: Saved the raw extracted dataset to a CSV file.
+```sql
+WITH borough_medians AS (
+    SELECT property_id,
+           borough,
+           score,
+           price,
+           PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY price) OVER (PARTITION BY borough) AS borough_median_price
+    FROM dbo.bookings
+)
+SELECT CAST(ROUND((SUM(CASE WHEN price < borough_median_price THEN 1 ELSE 0 END) * 100.0) / COUNT(*), 2) AS FLOAT) AS pct_underpriced_top_rated,
+       ROUND(AVG(CASE WHEN price < borough_median_price THEN borough_median_price - price END), 2) AS avg_nightly_lift,
+       ROUND(AVG(CASE WHEN price < borough_median_price THEN (borough_median_price - price) * 8 END), 2) AS monthly_weekend_lift
+FROM borough_medians
+WHERE score >= 8.5;
+```
 
-<h2> Dataset Summary </h2>
+</details>
 
-Rows: 6,885
+---
 
-Columns: 13 (Cleaned)
+## 2. Data Pipeline & Architecture
 
-Key features:
+```mermaid
+flowchart LR
+    A["Booking.com Search (London, USD)"] -->|01_scraper.ipynb / Selenium| B("01_raw_scraped_data.csv")
+    B -->|02_cleaning.ipynb / pandas| C("02_cleaned_data.csv")
+    C -->|SQLAlchemy + pyodbc| D[("MS SQL Server: da_projects.dbo.bookings")]
+    D -->|04_market_analysis.sql| E["Tableau Dashboard"]
+    E -->|Business Rules Extraction| F["dynamic_pricing_rules_spec.md"]
+```
 
-- **Property Info**: URL, Name, Property ID, Search URL.
-- **Location**: Borough, City.
-- **Pricing & Booking**: Price (USD), Check-In Date, Check-In Weekday.
-- **Ratings**: Score, Rating Category, Total Reviews. Metadata: Scraped At.
+- **Automated Extraction:** Built dynamic search URLs in Python targeting 1-night, 2-adult London stays in `USD`. Programmatically dismissed sign-in overlays, executed iterative scroll-and-click pagination, and parsed property cards.
+- **Cleaning & Feature Engineering:**
+  - Deduplicated records and standardized schema names.
+  - Extracted unique `property_id` slugs and split `location` into `borough` and `city` (handling city-only strings and setting missing boroughs to `'Unknown'`).
+  - Parsed multi-line rating strings into numerical `score`, `reviews` and categorical `rating`, applying `pd.cut` to classify sub-7.0 scores into `'Very Poor'` (`0–2.99`), `'Poor'` (`3.0–4.99`), and `'Average'` (`5.0–6.99`), while flagging unreviewed listings as `'No Reviews'`.
+  - Derived `check_in_weekday` and appended cleaned batches to both `cleaned_data.csv` and **MS SQL Server** (`da_projects.dbo.bookings`) using `SQLAlchemy`.
 
-<h2> Exploratory Data Analysis using Python </h2>
+---
 
-**Data Loading**: Import scraped dataset using pandas.
+## 3. SQL Exploratory Analysis & Market Insights
 
-**Data Cleaning**: Drop duplicate rows based on URL to ensure unique listings.
+![Tableau Dashboard Overview](dashboards/dashboard_overview.png)
 
-**Column Standardization**: Renamed all columns to lowercase.
+Using **MS SQL Server**, 8 core business questions (`Q1–Q8`) were analyzed using CTEs and window functions:
 
-**Feature Engineering**:
+1. **Borough Supply Concentration (`Q1` & `Q2`):** Supply is heavily concentrated in central hubs like **Westminster Borough** (~28.8% of single-day listings), while window functions (`MEDIAN`, `MIN`, `AVG`, `MAX` partitioned by `borough`) reveal wide gaps between mean (**$301.98**) and median (**$245.00**) nightly rates due to luxury outliers (up to **$1,491/night**).
+2. **Market Price Segmentation (`Q3`):** Grouping properties into four price brackets (`$0–299`, `$300–599`, `$600–899`, `$900+`) shows the majority of London inventory competes in the `$0–299` and `$300–599` tiers.
+3. **Temporal & Weekday Rate Elasticity (`Q4` & `Q5`):** Tracking rates across `check_in_date` and chronological `check_in_weekday` exposes flat-rate pricing habits among independent hosts across weekdays vs. weekends.
+4. **Rating Tier & Credibility Benchmarks (`Q6`, `Q7` & `Q8`):** Isolating the latest property snapshot, **Q7** ranks the Top 3 properties per borough filtered for credible review volume (`reviews > 50`), while **Q8** isolates high-value underpriced listings (`score > 7` priced below `borough_avg_price`).
 
-- Extract property_id directly from the URL string.
-- Split location into borough and city, handling edge cases where only the city is listed.
-- Split raw text ratings into distinct score, rating, and reviews columns.
-- Clean text characters from price and reviews and convert them to numeric data types.
-- Generate check_in_weekday extracted from the check-in date.
-- Categorize ratings for properties with scores below 7.
-- Missing Data Handling: Fill NULL values for reviews (0), scores (0), ratings ('No Reviews'), and boroughs ('Unknown').
+---
 
-**Data Consistency Check**: Drop transitional and redundant columns (ratings, score_text, location).
+## 4. Proposed Product Solution & Business Rules
 
-**Database Integration**: Connect to MS SQL Server using SQLAlchemy and append the cleaned dataset to the bookings table.
+To operationalize `Q7`, `Q8`, and the What-If median analysis into a Property Management System (PMS) feature, the following **Dynamic Pricing Decision Table** governs automated host rate alerts:
 
-<h2> Data Analysis using SQL </h2>
+| Rule ID   | Guest Score (`score`)      | Review Volume (`reviews`) | Stay Day (`check_in_weekday`) | Current `price` vs. Borough Benchmark | System Rate Recommendation             | Business Rationale                                                                                   |
+| :-------- | :------------------------- | :------------------------ | :---------------------------- | :------------------------------------ | :------------------------------------- | :--------------------------------------------------------------------------------------------------- |
+| **PR-01** | `>= 8.5` (Excellent)       | `> 50`                    | `Friday` / `Saturday`         | `price < borough_median_price`        | **Match Borough Median (+$53.62 avg)** | Captures peak weekend willingness-to-pay for proven top-tier properties (`$53.62/mo` lift).          |
+| **PR-02** | `> 7.0` to `8.4`           | `> 50`                    | `Monday` – `Thursday`         | `price < borough_avg_price` (Q8)      | **Nudge +5% toward Borough Avg**       | Closes underpricing gap on credible `"Good"` / `"Very Good"` weekday inventory.                      |
+| **PR-03** | `0.0` (`No Reviews`)       | `< 50`                    | `Monday` – `Thursday`         | `price >= borough_median_price`       | **Apply -10% Penetration Promo**       | Accelerates initial bookings for cold-start properties until they cross the `50+ reviews` threshold. |
+| **PR-04** | `< 7.0` (`Average`/`Poor`) | `Any`                     | `Any`                         | `price > borough_median_price`        | **Cap at Borough 25th Percentile**     | Prevents occupancy stagnation for sub-7.0 properties identified in `pd.cut` tiers.                   |
 
-1. **Property Distribution** - Count total properties available in each borough.
-   |borough |total_properties|
-   |--------------|----------------|
-   |Acton |1 |
-   |Brent |36 |
-   |Camden |230 |
-   |Chiswick |5 |
-   |City of London|54 |
-   |... |... |
+---
 
-2. **Price Range by Borough** - Calculate minimum, maximum, average, and median prices partitioned by borough.
-   |borough |min_price|avg_price|median_price|max_price|
-   |--------------|---------|---------|------------|---------|
-   |Acton |164 |164.00 |164 |164 |
-   |Brent |66 |182.68 |120 |1181 |
-   |Camden |50 |282.78 |241 |1374 |
-   |Chiswick |106 |208.04 |203 |375 |
-   |City of London|99 |405.96 |344 |1655 |
-   |...|... |... |... |... |
+## 5. Agile User Stories & KPI Framework
 
-3. **Pricing Segments** - Group properties into categorical price ranges and measure property volume per segment.
-   |price_range |total_properties|
-   |--------------|----------------|
-   |0-299 |1278 |
-   |300-599 |400 |
-   |600-899 |56 |
-   |900+ |18 |
+### User Story 1: Automated Weekend Rate Optimization Alert (`PR-01`)
 
-4. **Pricing Over Time** - Analyze minimum, average, and maximum prices grouped by check-in date.
-   |borough |check_in_date|min_price|avg_price|max_price|
-   |--------------|-------------|---------|---------|---------|
-   |Acton |2026-10-17 |164 |164 |164 |
-   |Brent |2026-10-13 |77 |149.55 |326 |
-   |Brent |2026-10-14 |80 |155.47 |368 |
-   |Brent |2026-10-15 |83 |172.11 |433 |
-   |Brent |2026-10-16 |93 |202.32 |494 |
-   |... |... |... |... |... |
+- **As a** London Property Host with a `score >= 8.5` and `reviews > 50`,
+- **I want** to receive an automated pricing prompt when my weekend nightly rate falls below my borough's median rate,
+- **So that** I can capture an estimated **$428.93 USD/month** in unrealized peak weekend revenue without manual competitor research.
+- **Acceptance Criteria (Given / When / Then):**
+  - **Given** a property’s latest scraped record (`last_scraped = 1`) has `score >= 8.5` and `reviews > 50`,
+  - **When** the listing's `price` for an upcoming Friday or Saturday `check_in_date` is less than `borough_median_price`,
+  - **Then** surface a _"Weekend Rate Opportunity"_ alert on the Host Dashboard displaying the exact `$Price_Gap` (`borough_median_price - price`) and a one-click **"Match Borough Median"** action button.
 
-5. **Weekday Price Variations** - Calculate average prices throughout the week per borough to identify booking trends.
-   |borough |check_in_weekday|avg_price|
-   |--------------|----------------|---------|
-   |Acton |Saturday |164 |
-   |Brent |Monday |122 |
-   |Brent |Tuesday |149.55 |
-   |Brent |Wednesday |155.47 |
-   |Brent |Thursday |172.11 |
-   |... |... |... |
+### Proposed KPI Monitoring Framework
 
-6. **Rating Category Comparison** - Compare average scores, prices, and review volumes across different rating categories.
-   |rating |avg_score|avg_price|avg_reviews|
-   |--------------|---------|---------|-----------|
-   |Exceptional |9.76 |319.23 |127.18 |
-   |Wonderful |9.15 |400.9 |872.59 |
-   |Excellent |8.73 |361.38 |2134.41 |
-   |Very Good |8.24 |282.76 |2556.81 |
-   |Good |7.49 |218.43 |2116.57 |
-   |... |... |... |... |
+| Metric Category          | Metric Name                       | SQL / BI Calculation Logic                                | Target Objective                                                           |
+| :----------------------- | :-------------------------------- | :-------------------------------------------------------- | :------------------------------------------------------------------------- |
+| **North Star KPI**       | **Host RevPAR Lift (USD)**        | `Total_Booking_Revenue_USD / Total_Available_Room_Nights` | Measure net revenue yield per available night after pricing rule adoption. |
+| **Product Adoption KPI** | **Rule Acceptance Rate**          | `Accepted_Rate_Recommendations / Total_Prompts_Triggered` | Track host adoption across `PR-01` through `PR-04`.                        |
+| **Guardrail KPI**        | **Cold-Start Velocity (`PR-03`)** | `Days to reach reviews > 50` for `'No Reviews'` listings  | Verify that weekday penetration discounts accelerate review accumulation.  |
 
-7. **Top-Rated Properties** - Rank and identify the top 3 highest-rated properties (with >50 reviews) per borough.
-   |borough |name|score|reviews|prop_avg_price|
-   |--------------|----|-----|-------|--------------|
-   |Brent |Large Double Bedroom 10 minutes to Central London|9.6 |84 |102 |
-   |Brent |StarNest Willesden Junction|9.3 |91 |142 |
-   |Brent |Flat in blue plaque building|8.9 |104 |114 |
-   |Camden |The Old Farmhouse Pub and Rooms|9.4 |279 |259 |
-   |Camden |Xylo Apartments - Kentish Town|9.3 |267 |393 |
-   |... |...|... |... |... |
-
-8. **Value Opportunities** - Identify properties with good ratings (>7) that are priced below their borough's average.
-   |property_id |name|price|score |
-   |--------------|----|-----|-------|
-   |centrally-located-comfortable-room-in-london|Centrally Located Comfortable Room in London|55 |9.3 |
-   |baraka-altmore|Baraka Altmore|55 |7.7 |
-   |charming-stay-near-london-eye-amp-westminster|Charming Stay Near London Eye & Westminster|61 |9 |
-   |zozy-clitterhouse|Zozy Clitterhouse|61 |7.8 |
-   |london-victoria-15-minutes-away|London Victoria 15 minutes away|62 |8.6 |
-   |... |...|... |... |
-
-<h2> Dashboard using Tableau </h2>
-
-![Dashboard](https://github.com/ThuCoo/DAProject_BookingScrape/blob/7a2e44f0c921070b790a4a3bb68ebfbad5cd2be7/Dashboard.png)
-
-[Tableau Link](https://public.tableau.com/views/DAProject-Bookings/Dashboard?:language=en-US&:sid=&:redirect=auth&:display_count=n&:origin=viz_share_link)
-
-<h2> Business Recommendations </h2>
-
-- **Penetration Pricing for Launch**: Launch with rates 15–20% below the borough average to maximize initial bookings and secure the first few positive reviews. Once top-tier ratings are established, scale prices up to capture good rating properties' price difference.
-
-- **Dynamic Weekday Pricing**: Automate base rates to increase mid-week to capture weekend demand.
-
-- **Direct Competitor Benchmarking**: Audit the top 3 highest-rated properties in the target borough to identify and replicate the specific amenities that drive high rating scores, justifying a premium price.
-
-- **Differentiating Against Value Competitors**: Counter highly-rated but underpriced properties by audit their listing trade-offs and market owned listing's key differentiators to sway guests into paying a modest premium for greater comfort.
-
-<h2> Self Reflection and Future Workthrough </h2>
-
-- Scraping still need work, maybe scrape at a deeper level.
-- Could be better if having more datas: seeing the differences between normal days and holidays, seeing booking trends, etc.
-- Need more woking with doing analysis with data of same properties but different scrape times.
-- Should have mapped price range on data cleaning phase(?).
+---

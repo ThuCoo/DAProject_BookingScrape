@@ -121,3 +121,17 @@ FROM     latest_prop AS l
 WHERE    l.score > 7
          AND l.avg_price < b.borough_avg_price
 ORDER BY l.avg_price ASC, l.score DESC;
+
+-- Business Case & What-If Opportunity Sizing (For Product Spec)
+WITH   borough_medians
+AS     (SELECT property_id,
+               borough,
+               score,
+               price,
+               PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY price) OVER (PARTITION BY borough) AS borough_median_price
+        FROM   dbo.bookings)
+SELECT CAST (ROUND((SUM(CASE WHEN price < borough_median_price THEN 1 ELSE 0 END) * 100.0) / COUNT(*), 2) AS FLOAT) AS pct_underpriced_top_rated,
+       ROUND(AVG(CASE WHEN price < borough_median_price THEN borough_median_price - price END), 2) AS avg_nightly_lift,
+       ROUND(AVG(CASE WHEN price < borough_median_price THEN (borough_median_price - price) * 8 END), 2) AS monthly_weekend_lift
+FROM   borough_medians
+WHERE  score >= 8.5;
